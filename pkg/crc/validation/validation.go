@@ -26,9 +26,6 @@ func ValidateCPUs(value int) error {
 
 // ValidateMemory checks if provided Memory count is valid
 func ValidateMemory(value int) error {
-	if value < constants.DefaultMemory {
-		return fmt.Errorf("requires memory in MiB >= %d", constants.DefaultMemory)
-	}
 	return ValidateEnoughMemory(value)
 }
 
