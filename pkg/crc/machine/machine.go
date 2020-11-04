@@ -277,6 +277,21 @@ func (client *client) Start(startConfig StartConfig) (*StartResult, error) {
 	}
 	logging.Info("CodeReady Containers VM is running")
 
+	// Enable the swap file
+	if _, err = sshRunner.Run("sudo swapon -a"); err != nil {
+		logging.Info("----- Could not enable the swap space -----")
+	}
+
+	// disable huge pages
+	if _, err = sshRunner.Run("sudo bash -c 'echo never > /sys/kernel/mm/transparent_hugepage/enabled'"); err != nil {
+		logging.Info("---- Could not disable huge pages -----")
+	}
+
+	// Remove immutability flag from API server. TODO: this can be done while creating crc disk
+	if _, err = sshRunner.Run("sudo chattr -i  /etc/kubernetes/manifests/kube-apiserver-pod.yaml"); err != nil {
+		logging.Info("---- Could not remove immutability flag from the manifest file of the API server  ------")
+	}
+
 	// Post VM start immediately update SSH key and copy kubeconfig to instance
 	// dir and VM
 	if err := updateSSHKeyAndCopyKubeconfig(sshRunner, client.name, crcBundleMetadata); err != nil {
