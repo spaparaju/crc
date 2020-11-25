@@ -278,10 +278,8 @@ func (client *client) Start(startConfig StartConfig) (*StartResult, error) {
 	logging.Info("CodeReady Containers VM is running")
 
 	// Create swapfile if not present
-	if _, err = sshRunner.Run("sudo swapon -s"); err != nil {
-		if _, err = sshRunner.Run("sudo /var/home/core/enable-swap-space.sh"); err != nil {
-			logging.Error("Could not create swapfile..")
-		}
+	if _, err = sshRunner.Run("sudo /var/home/core/enable-swap-space.sh"); err != nil {
+		logging.Error("Could not create swapfile..")
 	}
 
 	// disable huge pages
