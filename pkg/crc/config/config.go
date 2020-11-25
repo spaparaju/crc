@@ -72,10 +72,10 @@ func (c *Config) Set(key string, value interface{}) (string, error) {
 		}
 	}
 
-	ok, expectedValue := c.settingsByName[key].validationFn(castValue)
-	if !ok {
-		return "", fmt.Errorf(invalidProp, value, key, expectedValue)
-	}
+	//	ok, expectedValue := c.settingsByName[key].validationFn(castValue)
+	//	if !ok {
+	//		return "", fmt.Errorf(invalidProp, value, key, expectedValue)
+	//	}
 
 	if err := c.storage.Set(key, castValue); err != nil {
 		return "", err

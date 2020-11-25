@@ -63,9 +63,8 @@ func (r RetriableError) Error() string {
 // RetryAfter retries for a certain duration, after a delay
 func RetryAfter(limit time.Duration, callback func() error, d time.Duration) error {
 	m := MultiError{}
-	timeLimit := time.Now().Add(limit)
 	attempt := 0
-	for time.Now().Before(timeLimit) || attempt < 2 {
+	for attempt < 200 {
 		logging.Debugf("retry loop: attempt %d", attempt)
 		err := callback()
 		if err == nil {
