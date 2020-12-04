@@ -278,13 +278,22 @@ func (client *client) Start(startConfig StartConfig) (*StartResult, error) {
 	logging.Info("CodeReady Containers VM is running")
 
 	// Create swapfile if not present
-	if _, err = sshRunner.Run("sudo /var/home/core/enable-swap-space.sh"); err != nil {
+	if _, err = sshRunner.Run("sudo bash /var/home/core/enable-swap-space.sh"); err != nil {
 		logging.Error("Could not create swapfile..")
+	} else {
+		logging.Info("Enabled swapfile")
+	}
+
+	// Make the manifest files immutable
+	if _, err = sshRunner.Run("sudo chattr +i /etc/kubernetes/manifests/*"); err != nil {
+		logging.Error("Could not apply immutability to Kube manifest files..")
 	}
 
 	// disable huge pages
 	if _, err = sshRunner.Run("sudo bash -c 'echo never > /sys/kernel/mm/transparent_hugepage/enabled'"); err != nil {
-		logging.Info("---- Could not disable huge pages -----")
+		logging.Error("---- Could not disable huge pages -----")
+	} else {
+		logging.Info("Disabled hugepages at RHCOS")
 	}
 
 	// Post VM start immediately update SSH key and copy kubeconfig to instance
@@ -376,11 +385,6 @@ func (client *client) Start(startConfig StartConfig) (*StartResult, error) {
 
 	ocConfig := oc.UseOCWithSSH(sshRunner)
 
-	if err := cluster.ApproveCSRAndWaitForCertsRenewal(sshRunner, ocConfig, clientExpired, serverExpired); err != nil {
-		logBundleDate(crcBundleMetadata)
-		return nil, errors.Wrap(err, "Failed to renew TLS certificates: please check if a newer CodeReady Containers release is available")
-	}
-
 	if !exists {
 		logging.Info("Configuring cluster for first start")
 		if err := configProxyForCluster(ocConfig, sshRunner, sd, proxyConfig, instanceIP); err != nil {
@@ -388,8 +392,34 @@ func (client *client) Start(startConfig StartConfig) (*StartResult, error) {
 		}
 	}
 
+	if err := cluster.ApproveCSRAndWaitForCertsRenewal(sshRunner, ocConfig, clientExpired, serverExpired); err != nil {
+		logBundleDate(crcBundleMetadata)
+		return nil, errors.Wrap(err, "Failed to renew TLS certificates: please check if a newer CodeReady Containers release is available")
+	}
+
 	if err := cluster.EnsurePullSecretPresentInTheCluster(ocConfig, startConfig.PullSecret); err != nil {
 		return nil, errors.Wrap(err, "Failed to update cluster pull secret")
+	}
+
+	// Disable OLM
+	if startConfig.DisableOLM {
+		if _, err = sshRunner.Run("sudo bash /var/home/core/perf-delete-resources-of-olm.sh"); err != nil {
+			logging.Error("Could not diable OLM")
+		} else {
+			logging.Info("Disabled OLM ...")
+		}
+	} else {
+		logging.Info("OLM is not disabled ...... ")
+	}
+
+	if startConfig.DisableClusterMonitoring { // Disable Cluster monitoring
+		if _, err = sshRunner.Run("sudo bash /var/home/core/perf-delete-resources-of-cluster-monitoring.sh"); err != nil {
+			logging.Error("Could not diable Cluster monitoring")
+		} else {
+			logging.Info("Disabled Cluster monitoring ...")
+		}
+	} else {
+		logging.Info("Cluster monitoring is not disabled ...... ")
 	}
 
 	if err := cluster.EnsureClusterIDIsNotEmpty(ocConfig); err != nil {
