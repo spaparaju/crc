@@ -401,6 +401,17 @@ func (client *client) Start(startConfig StartConfig) (*StartResult, error) {
 		return nil, errors.Wrap(err, "Failed to update cluster pull secret")
 	}
 
+	// Disable Cluster monitoring
+	if startConfig.DisableClusterMonitoring {
+		if _, err = sshRunner.Run("sudo bash /var/home/core/perf-delete-resources-of-cluster-monitoring.sh"); err != nil {
+			logging.Error("Could not diable Cluster monitoring")
+		} else {
+			logging.Info("Disabled Cluster monitoring ...")
+		}
+	} else {
+		logging.Info("Cluster monitoring is not disabled ...... ")
+	}
+
 	// Disable OLM
 	if startConfig.DisableOLM {
 		if _, err = sshRunner.Run("sudo bash /var/home/core/perf-delete-resources-of-olm.sh"); err != nil {
@@ -410,16 +421,6 @@ func (client *client) Start(startConfig StartConfig) (*StartResult, error) {
 		}
 	} else {
 		logging.Info("OLM is not disabled ...... ")
-	}
-
-	if startConfig.DisableClusterMonitoring { // Disable Cluster monitoring
-		if _, err = sshRunner.Run("sudo bash /var/home/core/perf-delete-resources-of-cluster-monitoring.sh"); err != nil {
-			logging.Error("Could not diable Cluster monitoring")
-		} else {
-			logging.Info("Disabled Cluster monitoring ...")
-		}
-	} else {
-		logging.Info("Cluster monitoring is not disabled ...... ")
 	}
 
 	if err := cluster.EnsureClusterIDIsNotEmpty(ocConfig); err != nil {
