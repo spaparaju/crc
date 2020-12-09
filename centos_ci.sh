@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # bundle location
-BUNDLE_VERSION=4.6.1
+BUNDLE_VERSION=4.6.6
 BUNDLE=crc_libvirt_$BUNDLE_VERSION.crcbundle
 GO_VERSION=1.13.4
 
@@ -159,10 +159,7 @@ else
 	# setup to run integration tests
 	cd payload
 	make
-	make vendorcheck
-	make cross-lint
-	make cross
-	make test
+	make check
 	
 	# Retrieve password for rsync and run integration tests
 	CICO_PASS=$(echo $CICO_API_KEY | cut -d'-' -f1-2)

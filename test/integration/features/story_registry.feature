@@ -1,16 +1,15 @@
 @story_registry @linux
-Feature: Local image to image-registry to deployment
+Feature: Local image to image-registry
 
-    The user creates a local container image with an app. They then
-    push it to the openshift image-registry in their
-    project/namespace. They deploy and expose the app and check its
-    accessibility.
+    User creates a local container image with an app inside it. They then
+    push it to the OpenShift image-registry in their project/namespace.
+    They deploy and expose the app and check its accessibility.
 
     Scenario: Start CRC and login to cluster
         Given executing "crc setup" succeeds
         When starting CRC with default bundle succeeds
         Then stdout should contain "Started the OpenShift cluster"
-        When with up to "8" retries with wait period of "2m" command "crc status" output matches ".*Running \(v\d+\.\d+\.\d+.*\).*"
+        When checking that CRC is running
         Then executing "eval $(crc oc-env)" succeeds
         And login to the oc cluster succeeds
 

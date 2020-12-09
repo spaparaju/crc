@@ -22,7 +22,7 @@ const vmPullSecretPath = "/var/lib/kubelet/config.json"
 
 func WaitForSSH(sshRunner *ssh.Runner) error {
 	checkSSHConnectivity := func() error {
-		_, err := sshRunner.Run("exit 0")
+		_, _, err := sshRunner.Run("exit 0")
 		if err != nil {
 			return &errors.RetriableError{Err: err}
 		}
@@ -33,26 +33,28 @@ func WaitForSSH(sshRunner *ssh.Runner) error {
 }
 
 const (
-	kubeletServerCert = "/var/lib/kubelet/pki/kubelet-server-current.pem"
-	kubeletClientCert = "/var/lib/kubelet/pki/kubelet-client-current.pem"
+	KubeletServerCert = "/var/lib/kubelet/pki/kubelet-server-current.pem"
+	KubeletClientCert = "/var/lib/kubelet/pki/kubelet-client-current.pem"
 
 	kubeletClientSignerName = "kubernetes.io/kube-apiserver-client-kubelet"
+
+	AggregatorClientCert = "/etc/kubernetes/static-pod-resources/kube-apiserver-certs/configmaps/aggregator-client-ca/ca-bundle.crt"
 )
 
-func CheckCertsValidity(sshRunner *ssh.Runner) (bool, bool, error) {
-	client, err := checkCertValidity(sshRunner, kubeletClientCert)
-	if err != nil {
-		return false, false, err
+func CheckCertsValidity(sshRunner *ssh.Runner) (map[string]bool, error) {
+	statuses := make(map[string]bool)
+	for _, cert := range []string{KubeletClientCert, KubeletServerCert, AggregatorClientCert} {
+		expired, err := checkCertValidity(sshRunner, cert)
+		if err != nil {
+			return nil, err
+		}
+		statuses[cert] = expired
 	}
-	server, err := checkCertValidity(sshRunner, kubeletServerCert)
-	if err != nil {
-		return false, false, err
-	}
-	return client, server, nil
+	return statuses, nil
 }
 
 func checkCertValidity(sshRunner *ssh.Runner, cert string) (bool, error) {
-	output, err := sshRunner.Run(fmt.Sprintf(`date --date="$(sudo openssl x509 -in %s -noout -enddate | cut -d= -f 2)" --iso-8601=seconds`, cert))
+	output, _, err := sshRunner.Run(fmt.Sprintf(`date --date="$(sudo openssl x509 -in %s -noout -enddate | cut -d= -f 2)" --iso-8601=seconds`, cert))
 	if err != nil {
 		return false, err
 	}
@@ -71,7 +73,7 @@ func checkCertValidity(sshRunner *ssh.Runner, cert string) (bool, error) {
 func GetRootPartitionUsage(sshRunner *ssh.Runner) (int64, int64, error) {
 	cmd := "df -B1 --output=size,used,target /sysroot | tail -1"
 
-	out, err := sshRunner.Run(cmd)
+	out, _, err := sshRunner.Run(cmd)
 
 	if err != nil {
 		return 0, 0, err
@@ -257,7 +259,7 @@ func addProxyCACertToInstance(sshRunner *ssh.Runner, proxy *network.ProxyConfig)
 	if err := sshRunner.CopyData([]byte(proxy.ProxyCACert), "/etc/pki/ca-trust/source/anchors/openshift-config-user-ca-bundle.crt", 0600); err != nil {
 		return err
 	}
-	if _, err := sshRunner.Run("sudo update-ca-trust"); err != nil {
+	if _, _, err := sshRunner.Run("sudo update-ca-trust"); err != nil {
 		return err
 	}
 	return nil
@@ -280,7 +282,7 @@ func (p *PullSecret) Value() (string, error) {
 }
 
 func EnsurePullSecretPresentOnInstanceDisk(sshRunner *ssh.Runner, pullSecret *PullSecret) error {
-	if _, err := sshRunner.Run(fmt.Sprintf("test -e %s", vmPullSecretPath)); err == nil {
+	if _, _, err := sshRunner.Run(fmt.Sprintf("test -e %s", vmPullSecretPath)); err == nil {
 		return nil
 	}
 	logging.Info("Adding user's pull secret to instance disk...")
@@ -291,23 +293,15 @@ func EnsurePullSecretPresentOnInstanceDisk(sshRunner *ssh.Runner, pullSecret *Pu
 	return sshRunner.CopyData([]byte(content), vmPullSecretPath, 0600)
 }
 
-func WaitforRequestHeaderClientCaFile(ocConfig oc.Config) error {
-	if err := WaitForOpenshiftResource(ocConfig, "configmaps"); err != nil {
-		return err
-	}
-
+func WaitForRequestHeaderClientCaFile(sshRunner *ssh.Runner) error {
 	lookupRequestHeaderClientCa := func() error {
-		cmdArgs := []string{"get", "configmaps/extension-apiserver-authentication", `-ojsonpath={.data.requestheader-client-ca-file}`,
-			"-n", "kube-system"}
-
-		stdout, stderr, err := ocConfig.RunOcCommand(cmdArgs...)
+		expired, err := checkCertValidity(sshRunner, AggregatorClientCert)
 		if err != nil {
-			return fmt.Errorf("Failed to get request header client ca file %v: %s", err, stderr)
+			return fmt.Errorf("Failed to the expiry date: %v", err)
 		}
-		if stdout == "" {
-			return &errors.RetriableError{Err: fmt.Errorf("missing .data.requestheader-client-ca-file")}
+		if expired {
+			return &errors.RetriableError{Err: fmt.Errorf("certificate still expired")}
 		}
-		logging.Debugf("Found .data.requestheader-client-ca-file: %s", stdout)
 		return nil
 	}
 	return errors.RetryAfter(8*time.Minute, lookupRequestHeaderClientCa, 2*time.Second)

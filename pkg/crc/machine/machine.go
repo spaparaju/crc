@@ -180,9 +180,9 @@ func (client *client) Start(startConfig StartConfig) (*StartResult, error) {
 			return nil, errors.Wrap(err, "Error getting bundle metadata")
 		}
 
-		logging.Infof("Checking size of the disk image %s ...", crcBundleMetadata.GetDiskImagePath())
-		if err := crcBundleMetadata.CheckDiskImageSize(); err != nil {
-			return nil, errors.Wrapf(err, "Invalid bundle disk image '%s'", crcBundleMetadata.GetDiskImagePath())
+		logging.Infof("Verifying bundle %s ...", filepath.Base(startConfig.BundlePath))
+		if err := crcBundleMetadata.Verify(); err != nil {
+			return nil, errors.Wrapf(err, "Invalid bundle %s", filepath.Base(startConfig.BundlePath))
 		}
 
 		logging.Infof("Creating CodeReady Containers VM for OpenShift %s...", crcBundleMetadata.GetOpenshiftVersion())
@@ -269,7 +269,11 @@ func (client *client) Start(startConfig StartConfig) (*StartResult, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "Error getting the IP")
 	}
-	sshRunner := crcssh.CreateRunner(instanceIP, getSSHPort(client.useVSock()), crcBundleMetadata.GetSSHKeyPath(), constants.GetPrivateKeyPath())
+	sshRunner, err := crcssh.CreateRunner(instanceIP, getSSHPort(client.useVSock()), crcBundleMetadata.GetSSHKeyPath(), constants.GetPrivateKeyPath())
+	if err != nil {
+		return nil, errors.Wrap(err, "Error creating the ssh client")
+	}
+	defer sshRunner.Close()
 
 	logging.Debug("Waiting until ssh is available")
 	if err := cluster.WaitForSSH(sshRunner); err != nil {
@@ -278,19 +282,19 @@ func (client *client) Start(startConfig StartConfig) (*StartResult, error) {
 	logging.Info("CodeReady Containers VM is running")
 
 	// Create swapfile if not present
-	if _, err = sshRunner.Run("sudo bash /var/home/core/enable-swap-space.sh"); err != nil {
+	if _, _, err = sshRunner.Run("sudo bash /var/home/core/enable-swap-space.sh"); err != nil {
 		logging.Error("Could not create swapfile..")
 	} else {
 		logging.Info("Enabled swapfile")
 	}
 
 	// Make the manifest files immutable
-	if _, err = sshRunner.Run("sudo chattr +i /etc/kubernetes/manifests/*"); err != nil {
+	if _, _, err = sshRunner.Run("sudo chattr +i /etc/kubernetes/manifests/*"); err != nil {
 		logging.Error("Could not apply immutability to Kube manifest files..")
 	}
 
 	// disable huge pages
-	if _, err = sshRunner.Run("sudo bash -c 'echo never > /sys/kernel/mm/transparent_hugepage/enabled'"); err != nil {
+	if _, _, err = sshRunner.Run("sudo bash -c 'echo never > /sys/kernel/mm/transparent_hugepage/enabled'"); err != nil {
 		logging.Error("---- Could not disable huge pages -----")
 	} else {
 		logging.Info("Disabled hugepages at RHCOS")
@@ -303,14 +307,14 @@ func (client *client) Start(startConfig StartConfig) (*StartResult, error) {
 	}
 
 	// Trigger disk resize, this will be a no-op if no disk size change is needed
-	if _, err = sshRunner.Run("sudo xfs_growfs / >/dev/null"); err != nil {
+	if _, _, err = sshRunner.Run("sudo xfs_growfs / >/dev/null"); err != nil {
 		return nil, errors.Wrap(err, "Error updating filesystem size")
 	}
 
 	// Start network time synchronization if `CRC_DEBUG_ENABLE_STOP_NTP` is not set
 	if stopNtp, _ := strconv.ParseBool(os.Getenv("CRC_DEBUG_ENABLE_STOP_NTP")); !stopNtp {
 		logging.Info("Starting network time synchronization in CodeReady Containers VM")
-		if _, err := sshRunner.Run("sudo timedatectl set-ntp on"); err != nil {
+		if _, _, err := sshRunner.Run("sudo timedatectl set-ntp on"); err != nil {
 			return nil, errors.Wrap(err, "Failed to start network time synchronization")
 		}
 	}
@@ -372,7 +376,7 @@ func (client *client) Start(startConfig StartConfig) (*StartResult, error) {
 
 	// Check the certs validity inside the vm
 	logging.Info("Verifying validity of the kubelet certificates ...")
-	clientExpired, serverExpired, err := cluster.CheckCertsValidity(sshRunner)
+	certsExpired, err := cluster.CheckCertsValidity(sshRunner)
 	if err != nil {
 		return nil, errors.Wrap(err, "Failed to check certificate validity")
 	}
@@ -392,7 +396,7 @@ func (client *client) Start(startConfig StartConfig) (*StartResult, error) {
 		}
 	}
 
-	if err := cluster.ApproveCSRAndWaitForCertsRenewal(sshRunner, ocConfig, clientExpired, serverExpired); err != nil {
+	if err := cluster.ApproveCSRAndWaitForCertsRenewal(sshRunner, ocConfig, certsExpired[cluster.KubeletClientCert], certsExpired[cluster.KubeletServerCert]); err != nil {
 		logBundleDate(crcBundleMetadata)
 		return nil, errors.Wrap(err, "Failed to renew TLS certificates: please check if a newer CodeReady Containers release is available")
 	}
@@ -403,7 +407,7 @@ func (client *client) Start(startConfig StartConfig) (*StartResult, error) {
 
 	// Disable Cluster monitoring
 	if startConfig.DisableClusterMonitoring {
-		if _, err = sshRunner.Run("sudo bash /var/home/core/perf-delete-resources-of-cluster-monitoring.sh"); err != nil {
+		if _, _, err = sshRunner.Run("sudo bash /var/home/core/perf-delete-resources-of-cluster-monitoring.sh"); err != nil {
 			logging.Error("Could not diable Cluster monitoring")
 		} else {
 			logging.Info("Disabled Cluster monitoring ...")
@@ -414,7 +418,7 @@ func (client *client) Start(startConfig StartConfig) (*StartResult, error) {
 
 	// Disable OLM
 	if startConfig.DisableOLM {
-		if _, err = sshRunner.Run("sudo bash /var/home/core/perf-delete-resources-of-olm.sh"); err != nil {
+		if _, _, err = sshRunner.Run("sudo bash /var/home/core/perf-delete-resources-of-olm.sh"); err != nil {
 			logging.Error("Could not diable OLM")
 		} else {
 			logging.Info("Disabled OLM ...")
@@ -445,13 +449,15 @@ func (client *client) Start(startConfig StartConfig) (*StartResult, error) {
 	// A restart of the openshift-apiserver pod is enough to clear that error and get a working cluster.
 	// This is a work-around while the root cause is being identified.
 	// More info: https://bugzilla.redhat.com/show_bug.cgi?id=1795163
-	logging.Debug("Waiting for update of client-ca request header ...")
-	if err := cluster.WaitforRequestHeaderClientCaFile(ocConfig); err != nil {
-		return nil, errors.Wrap(err, "Failed to wait for the client-ca request header update")
-	}
+	if certsExpired[cluster.AggregatorClientCert] {
+		logging.Debug("Waiting for the renewal of the request header client ca...")
+		if err := cluster.WaitForRequestHeaderClientCaFile(sshRunner); err != nil {
+			return nil, errors.Wrap(err, "Failed to wait for aggregator client ca renewal")
+		}
 
-	if err := cluster.DeleteOpenshiftAPIServerPods(ocConfig); err != nil {
-		return nil, errors.Wrap(err, "Cannot delete OpenShift API Server pods")
+		if err := cluster.DeleteOpenshiftAPIServerPods(ocConfig); err != nil {
+			return nil, errors.Wrap(err, "Cannot delete OpenShift API Server pods")
+		}
 	}
 
 	logging.Info("Starting OpenShift cluster ... [waiting 3m]")
@@ -643,7 +649,11 @@ func (client *client) Status() (*ClusterStatusResult, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "Error getting ip")
 	}
-	sshRunner := crcssh.CreateRunner(ip, getSSHPort(client.useVSock()), constants.GetPrivateKeyPath())
+	sshRunner, err := crcssh.CreateRunner(ip, getSSHPort(client.useVSock()), constants.GetPrivateKeyPath())
+	if err != nil {
+		return nil, errors.Wrap(err, "Error creating the ssh client")
+	}
+	defer sshRunner.Close()
 	// check if all the clusteroperators are running
 	diskSize, diskUse, err := cluster.GetRootPartitionUsage(sshRunner)
 	if err != nil {
@@ -788,14 +798,14 @@ func updateSSHKeyPair(sshRunner *crcssh.Runner) error {
 		return err
 	}
 
-	authorizedKeys, err := sshRunner.Run("cat /home/core/.ssh/authorized_keys")
+	authorizedKeys, _, err := sshRunner.Run("cat /home/core/.ssh/authorized_keys")
 	if err == nil && strings.TrimSpace(authorizedKeys) == strings.TrimSpace(string(publicKey)) {
 		return nil
 	}
 
 	logging.Info("Updating authorized keys ...")
 	cmd := fmt.Sprintf("echo '%s' > /home/core/.ssh/authorized_keys; chmod 644 /home/core/.ssh/authorized_keys", publicKey)
-	_, err = sshRunner.Run(cmd)
+	_, _, err = sshRunner.Run(cmd)
 	if err != nil {
 		return err
 	}

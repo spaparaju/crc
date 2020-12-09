@@ -1,10 +1,15 @@
 SHELL := /bin/bash
 
-BUNDLE_VERSION = 4.6.3
+BUNDLE_VERSION = 4.6.6
 BUNDLE_EXTENSION = crcbundle
-CRC_VERSION = 1.19.0
+CRC_VERSION = 1.20.0
 COMMIT_SHA=$(shell git rev-parse --short HEAD)
 CONTAINER_RUNTIME ?= podman
+
+ifdef OKD_VERSION
+    BUNDLE_VERSION = $(OKD_VERSION)
+    CRC_VERSION := $(CRC_VERSION)-OKD
+endif
 
 # Go and compilation related variables
 BUILD_DIR ?= out
@@ -47,6 +52,10 @@ VERSION_VARIABLES := -X $(REPOPATH)/pkg/crc/version.crcVersion=$(CRC_VERSION) \
     -X $(REPOPATH)/pkg/crc/version.bundleVersion=$(BUNDLE_VERSION) \
 	-X $(REPOPATH)/pkg/crc/version.commitSha=$(COMMIT_SHA)
 
+ifdef OKD_VERSION
+	VERSION_VARIABLES := $(VERSION_VARIABLES) -X $(REPOPATH)/pkg/crc/version.okdBuild=true
+endif
+
 # https://golang.org/cmd/link/
 LDFLAGS := $(VERSION_VARIABLES) -extldflags='-static' -s -w
 
@@ -63,6 +72,9 @@ vendor:
 .PHONY: vendorcheck
 vendorcheck:
 	./verify-vendor.sh
+
+.PHONY: check
+check: cross build_integration $(HOST_BUILD_DIR)/crc-embedder test cross-lint vendorcheck
 
 # Start of the actual build targets
 
@@ -141,7 +153,7 @@ fmt:
 	@gofmt -l -w $(SOURCE_DIRS)
 
 $(GOPATH)/bin/golangci-lint:
-	pushd /tmp && GO111MODULE=on go get github.com/golangci/golangci-lint/cmd/golangci-lint@v1.31.0 && popd
+	pushd /tmp && GO111MODULE=on go get github.com/golangci/golangci-lint/cmd/golangci-lint@v1.33.0 && popd
 
 # Run golangci-lint against code
 .PHONY: lint cross-lint

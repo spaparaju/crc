@@ -20,25 +20,13 @@ import (
 	"github.com/code-ready/crc/pkg/crc/systemd"
 	"github.com/code-ready/crc/pkg/crc/systemd/states"
 	crcos "github.com/code-ready/crc/pkg/os"
+	"github.com/code-ready/crc/pkg/os/linux"
 	libvirtxml "github.com/libvirt/libvirt-go-xml"
 )
 
 const (
-	crcDnsmasqConfigFile        = "crc.conf"
-	crcNetworkManagerConfigFile = "crc-nm-dnsmasq.conf"
 	// This is defined in https://github.com/code-ready/machine-driver-libvirt/blob/master/go.mod#L5
 	minSupportedLibvirtVersion = "3.4.0"
-)
-
-var (
-	crcDnsmasqConfigPath = filepath.Join(string(filepath.Separator), "etc", "NetworkManager", "dnsmasq.d", crcDnsmasqConfigFile)
-	crcDnsmasqConfig     = `server=/apps-crc.testing/192.168.130.11
-server=/crc.testing/192.168.130.11
-`
-	crcNetworkManagerConfigPath = filepath.Join(string(filepath.Separator), "etc", "NetworkManager", "conf.d", crcNetworkManagerConfigFile)
-	crcNetworkManagerConfig     = `[main]
-dns=dnsmasq
-`
 )
 
 func checkVirtualizationEnabled() error {
@@ -142,14 +130,29 @@ func checkLibvirtInstalled() error {
 	return nil
 }
 
-func fixLibvirtInstalled() error {
-	logging.Debug("Trying to install libvirt")
-	stdOut, stdErr, err := crcos.RunWithPrivilege("install virtualization related packages", "yum", "install", "-y", "libvirt", "libvirt-daemon-kvm", "qemu-kvm")
-	if err != nil {
-		return fmt.Errorf("Could not install required packages: %s %v: %s", stdOut, err, stdErr)
+func fixLibvirtInstalled(distro *linux.OsRelease) func() error {
+	return func() error {
+		logging.Debug("Trying to install libvirt")
+		stdOut, stdErr, err := crcos.RunWithPrivilege("install virtualization related packages", "/bin/sh", "-c", installLibvirtCommand(distro))
+		if err != nil {
+			return fmt.Errorf("Could not install required packages: %s %v: %s", stdOut, err, stdErr)
+		}
+		logging.Debug("libvirt was successfully installed")
+		return nil
 	}
-	logging.Debug("libvirt was successfully installed")
-	return nil
+}
+
+func installLibvirtCommand(distro *linux.OsRelease) string {
+	yumCommand := "yum install -y libvirt libvirt-daemon-kvm qemu-kvm"
+	switch distroID(distro) {
+	case linux.Ubuntu:
+		return "apt-get update && apt-get install -y libvirt-daemon libvirt-daemon-system libvirt-clients"
+	case linux.RHEL, linux.CentOS, linux.Fedora:
+		return yumCommand
+	default:
+		logging.Warnf("unsupported distribution %s, trying to install libvirt with yum", distro)
+		return yumCommand
+	}
 }
 
 func fixLibvirtVersion() error {
@@ -201,19 +204,25 @@ func checkUserPartOfLibvirtGroup() error {
 	return fmt.Errorf("%s not part of libvirtd group", currentUser.Username)
 }
 
-func fixUserPartOfLibvirtGroup() error {
-	logging.Debug("Adding current user to the libvirt group")
-	currentUser, err := user.Current()
-	if err != nil {
-		logging.Debugf("user.Current() failed: %v", err)
-		return fmt.Errorf("Failed to get current user id")
+func fixUserPartOfLibvirtGroup(distro *linux.OsRelease) func() error {
+	return func() error {
+		logging.Debug("Adding current user to the libvirt group")
+		currentUser, err := user.Current()
+		if err != nil {
+			logging.Debugf("user.Current() failed: %v", err)
+			return fmt.Errorf("Failed to get current user id")
+		}
+		_, _, err = crcos.RunWithPrivilege("add user to libvirt group", "usermod", "-a", "-G", "libvirt", currentUser.Username)
+		if err != nil {
+			return fmt.Errorf("Failed to add user to libvirt group")
+		}
+		logging.Debug("Current user is in the libvirt group")
+
+		if distroIsLike(distro, linux.Ubuntu) {
+			return fmt.Errorf("Current user added to libvirt group. Please logout and login again")
+		}
+		return err
 	}
-	_, _, err = crcos.RunWithPrivilege("add user to libvirt group", "usermod", "-a", "-G", "libvirt", currentUser.Username)
-	if err != nil {
-		return fmt.Errorf("Failed to add user to libvirt group")
-	}
-	logging.Debug("Current user is in the libvirt group")
-	return nil
 }
 
 func checkLibvirtServiceRunning() error {
@@ -223,12 +232,19 @@ func checkLibvirtServiceRunning() error {
 	libvirtSystemdUnits := []string{"virtqemud.socket", "libvirtd.socket", "virtqemud.service", "libvirtd.service"}
 	for _, unit := range libvirtSystemdUnits {
 		status, err := sd.Status(unit)
-		if err == nil && status == states.Running {
-			logging.Debugf("%s is running", unit)
-			return nil
+		if err == nil {
+			switch status {
+			case states.Running:
+				logging.Debugf("%s is running", unit)
+				return nil
+			case states.Listening:
+				logging.Debugf("%s is listening", unit)
+				return nil
+			default:
+				logging.Debugf("%s is neither running nor listening", unit)
+			}
 		}
 
-		logging.Debugf("%s is not running", unit)
 	}
 
 	logging.Warnf("No active (running) libvirtd systemd unit could be found - make sure one of libvirt systemd units is enabled so that it's autostarted at boot time.")
@@ -274,32 +290,6 @@ func fixMachineDriverLibvirtInstalled() error {
 		return fmt.Errorf("Unable to download %s: %v", machineDriverLibvirt.GetExecutableName(), err)
 	}
 	logging.Debugf("%s is installed in %s", machineDriverLibvirt.GetExecutableName(), filepath.Dir(machineDriverLibvirt.GetExecutablePath()))
-	return nil
-}
-
-/* These 2 checks can be removed after a few releases */
-func checkOldMachineDriverLibvirtInstalled() error {
-	logging.Debugf("Checking if an older libvirt driver %s is installed", libvirt.MachineDriverCommand)
-	oldLibvirtDriverPath := filepath.Join("/usr/local/bin/", libvirt.MachineDriverCommand)
-	if _, err := os.Stat(oldLibvirtDriverPath); !os.IsNotExist(err) {
-		return fmt.Errorf("Found old system-wide crc-machine-driver executable")
-	}
-	logging.Debugf("No older %s installation found", libvirt.MachineDriverCommand)
-
-	return nil
-}
-
-func fixOldMachineDriverLibvirtInstalled() error {
-	oldLibvirtDriverPath := filepath.Join("/usr/local/bin/", libvirt.MachineDriverCommand)
-	logging.Debugf("Removing %s", oldLibvirtDriverPath)
-	_, _, err := crcos.RunWithPrivilege("remove old libvirt driver", "rm", "-f", oldLibvirtDriverPath)
-	if err != nil {
-		logging.Debugf("Removal of %s failed", oldLibvirtDriverPath)
-		/* Ignoring error, an obsolete file being still present is not a fatal error */
-	} else {
-		logging.Debugf("%s successfully removed", oldLibvirtDriverPath)
-	}
-
 	return nil
 }
 
@@ -385,13 +375,6 @@ func removeLibvirtCrcNetwork() error {
 }
 
 func removeCrcVM() error {
-	logging.Debug("Removing 'crc' VM")
-
-	if err := os.RemoveAll(constants.MachineInstanceDir); err != nil {
-		logging.Debugf("Error removing %s dir: %v", constants.MachineInstanceDir, err)
-		return fmt.Errorf("Error removing %s dir", constants.MachineInstanceDir)
-	}
-
 	stdout, _, err := crcos.RunWithDefaultLocale("virsh", "--connect", "qemu:///system", "domstate", constants.DefaultName)
 	if err != nil {
 		//  User may have run `crc delete` before `crc cleanup`

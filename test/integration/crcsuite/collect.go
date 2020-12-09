@@ -182,13 +182,11 @@ func (collector *VMCommandCollector) Collect(w Writer) error {
 	if err != nil {
 		return err
 	}
-	ssh, err := ssh.NewClient(constants.DefaultSSHUser, ip, 22, &ssh.Auth{
-		Keys: []string{constants.GetPrivateKeyPath()},
-	})
+	ssh, err := ssh.NewClient(constants.DefaultSSHUser, ip, 22, constants.GetPrivateKeyPath())
 	if err != nil {
 		return err
 	}
-	out, err := ssh.Output(collector.Command)
+	out, _, err := ssh.Run(collector.Command)
 	if err != nil {
 		return errors.Wrapf(err, "collecting %s", collector.Target)
 	}
@@ -205,18 +203,16 @@ func (collector *ContainerLogCollector) Collect(w Writer) error {
 	if err != nil {
 		return err
 	}
-	ssh, err := ssh.NewClient(constants.DefaultSSHUser, ip, 22, &ssh.Auth{
-		Keys: []string{constants.GetPrivateKeyPath()},
-	})
+	ssh, err := ssh.NewClient(constants.DefaultSSHUser, ip, 22, constants.GetPrivateKeyPath())
 	if err != nil {
 		return err
 	}
-	out, err := ssh.Output(fmt.Sprintf("sudo %s ps -a -q", collector.Process))
+	out, _, err := ssh.Run(fmt.Sprintf("sudo %s ps -a -q", collector.Process))
 	if err != nil {
 		return err
 	}
-	for _, id := range strings.Split(strings.TrimSpace(out), "\n") {
-		inspect, err := ssh.Output(fmt.Sprintf("sudo %s inspect %s", collector.Process, id))
+	for _, id := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		inspect, _, err := ssh.Run(fmt.Sprintf("sudo %s inspect %s", collector.Process, id))
 		if err != nil {
 			logging.Errorf("error while inspecting %s: %v", id, err)
 			continue
@@ -225,7 +221,7 @@ func (collector *ContainerLogCollector) Collect(w Writer) error {
 			logging.Errorf("error while inspecting %s: %v", id, err)
 			continue
 		}
-		logs, err := ssh.Output(fmt.Sprintf("sudo %s logs --tail 200 %s", collector.Process, id))
+		logs, _, err := ssh.Run(fmt.Sprintf("sudo %s logs --tail 200 %s", collector.Process, id))
 		if err != nil {
 			logging.Errorf("error while getting logs %s: %v", id, err)
 			continue

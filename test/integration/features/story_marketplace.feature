@@ -1,14 +1,15 @@
 @story_marketplace
-Feature: 
-    Install OpenShift operator from OperatorHub and use it to manage
-    admin tasks.
+Feature: Operator from marketplace
+
+    User installs an OpenShift operator from OperatorHub and uses
+    it to manage admin tasks.
 
     @linux @darwin
     Scenario: Start CRC and login to cluster
         Given executing "crc setup" succeeds
         When starting CRC with default bundle succeeds
         Then stdout should contain "Started the OpenShift cluster"
-        When with up to "8" retries with wait period of "2m" command "crc status" output matches ".*Running \(v\d+\.\d+\.\d+.*\).*"
+        When checking that CRC is running
         Then executing "eval $(crc oc-env)" succeeds
         And login to the oc cluster succeeds
 
@@ -18,7 +19,7 @@ Feature:
         When starting CRC with default bundle and nameserver "10.75.5.25" succeeds
         Then stdout should contain "Started the OpenShift cluster"
         And executing "crc oc-env | Invoke-Expression" succeeds
-        When with up to "4" retries with wait period of "2m" command "crc status --log-level debug" output matches ".*Running \(v\d+\.\d+\.\d+.*\).*"
+        When checking that CRC is running
         Then login to the oc cluster succeeds
 
     @darwin @linux @windows

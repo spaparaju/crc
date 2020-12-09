@@ -1,8 +1,8 @@
 package ssh
 
 import (
+	"bytes"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"net"
 	"strconv"
@@ -13,47 +13,44 @@ import (
 )
 
 type Client interface {
-	Output(command string) (string, error)
+	Run(command string) ([]byte, []byte, error)
+	Close()
 }
 
 type NativeClient struct {
-	Config   ssh.ClientConfig
+	User     string
 	Hostname string
 	Port     int
+	Keys     []string
+
+	conn *ssh.Client
 }
 
-type Auth struct {
-	Keys []string
-}
-
-func NewClient(user string, host string, port int, auth *Auth) (Client, error) {
-	config, err := NewNativeConfig(user, auth)
-	if err != nil {
-		return nil, fmt.Errorf("Error getting config for native Go SSH: %s", err)
-	}
-
+func NewClient(user string, host string, port int, keys ...string) (Client, error) {
 	return &NativeClient{
-		Config:   config,
+		User:     user,
 		Hostname: host,
 		Port:     port,
+		Keys:     keys,
 	}, nil
 }
 
-func NewNativeConfig(user string, auth *Auth) (ssh.ClientConfig, error) {
+func clientConfig(user string, keys []string) (*ssh.ClientConfig, error) {
 	var (
 		privateKeys []ssh.Signer
 		authMethods []ssh.AuthMethod
 	)
 
-	for _, k := range auth.Keys {
+	for _, k := range keys {
 		key, err := ioutil.ReadFile(k)
 		if err != nil {
-			return ssh.ClientConfig{}, err
+			log.Debugf("Cannot read private ssh key %s", k)
+			continue
 		}
 
 		privateKey, err := ssh.ParsePrivateKey(key)
 		if err != nil {
-			return ssh.ClientConfig{}, err
+			return nil, err
 		}
 
 		privateKeys = append(privateKeys, privateKey)
@@ -63,7 +60,7 @@ func NewNativeConfig(user string, auth *Auth) (ssh.ClientConfig, error) {
 		authMethods = append(authMethods, ssh.PublicKeys(privateKeys...))
 	}
 
-	return ssh.ClientConfig{
+	return &ssh.ClientConfig{
 		User: user,
 		Auth: authMethods,
 		// #nosec G106
@@ -72,36 +69,49 @@ func NewNativeConfig(user string, auth *Auth) (ssh.ClientConfig, error) {
 	}, nil
 }
 
-func (client *NativeClient) session() (*ssh.Client, *ssh.Session, error) {
-	conn, err := ssh.Dial("tcp", net.JoinHostPort(client.Hostname, strconv.Itoa(client.Port)), &client.Config)
-	if err != nil {
-		return nil, nil, err
+func (client *NativeClient) session() (*ssh.Session, error) {
+	if client.conn == nil {
+		var err error
+		config, err := clientConfig(client.User, client.Keys)
+		if err != nil {
+			return nil, fmt.Errorf("Error getting config for native Go SSH: %s", err)
+		}
+		client.conn, err = ssh.Dial("tcp", net.JoinHostPort(client.Hostname, strconv.Itoa(client.Port)), config)
+		if err != nil {
+			return nil, err
+		}
 	}
-	session, err := conn.NewSession()
+	session, err := client.conn.NewSession()
 	if err != nil {
-		_ = conn.Close()
-		return nil, nil, err
+		return nil, err
 	}
-	return conn, session, err
+	return session, err
 }
 
-func (client *NativeClient) Output(command string) (string, error) {
-	conn, session, err := client.session()
+func (client *NativeClient) Run(command string) ([]byte, []byte, error) {
+	session, err := client.session()
 	if err != nil {
-		return "", err
+		return nil, nil, err
 	}
-	defer closeConn(conn)
 	defer session.Close()
 
-	output, err := session.CombinedOutput(command)
-	if err != nil {
-		return "", err
-	}
-	return string(output), nil
+	var (
+		stdout bytes.Buffer
+		stderr bytes.Buffer
+	)
+	session.Stdout = &stdout
+	session.Stderr = &stderr
+
+	err = session.Run(command)
+
+	return stdout.Bytes(), stderr.Bytes(), err
 }
 
-func closeConn(c io.Closer) {
-	err := c.Close()
+func (client *NativeClient) Close() {
+	if client.conn == nil {
+		return
+	}
+	err := client.conn.Close()
 	if err != nil {
 		log.Debugf("Error closing SSH Client: %s", err)
 	}

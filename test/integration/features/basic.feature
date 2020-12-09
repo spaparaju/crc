@@ -1,6 +1,8 @@
 @basic
 Feature: Basic test
-    Checks whether CRC top-level commands behave correctly.
+
+    User explores some of the top-level CRC commands while going
+    through the lifecycle of CRC.
 
     @darwin @linux @windows
     Scenario: CRC version
@@ -21,7 +23,7 @@ Feature: Basic test
         And stdout should contain "delete"
         And stdout should contain "status"
         And stdout should contain "Flags:"
-        And stdout should contain 
+        And stdout should contain
             """
             Use "crc [command] --help" for more information about a command.
             """
@@ -29,10 +31,10 @@ Feature: Basic test
     @darwin @linux @windows
     Scenario: CRC status
         When executing "crc status" fails
-        Then stderr should contain 
-        """
-        Machine 'crc' does not exist. Use 'crc start' to create it
-        """
+        Then stderr should contain
+            """
+            Machine 'crc' does not exist. Use 'crc start' to create it
+            """
 
     @linux
     Scenario: CRC setup on Linux
@@ -45,19 +47,18 @@ Feature: Basic test
         And stderr should contain "Checking if user is part of libvirt group"
         And stderr should contain "Checking if libvirt daemon is running"
         And stderr should contain "Checking if a supported libvirt version is installed"
-        And stderr should contain "Checking for obsolete crc-driver-libvirt"
         And stderr should contain "Checking if libvirt 'crc' network is available"
         And stderr should contain "Checking if libvirt 'crc' network is active"
         And stderr should contain "Checking if NetworkManager is installed"
         And stderr should contain "Checking if NetworkManager service is running"
         And stderr should contain "Checking if /etc/NetworkManager/conf.d/crc-nm-dnsmasq.conf exists"
         And stderr should contain "Writing Network Manager config for crc"
-        And stderr should contain "Will use root access: write NetworkManager config in /etc/NetworkManager/conf.d/crc-nm-dnsmasq.conf"
+        And stderr should contain "Will use root access: write NetworkManager configuration to /etc/NetworkManager/conf.d/crc-nm-dnsmasq.conf"
         And stderr should contain "Will use root access: executing systemctl daemon-reload command"
         And stderr should contain "Will use root access: executing systemctl reload NetworkManager"
         And stderr should contain "Checking if /etc/NetworkManager/dnsmasq.d/crc.conf exists"
         And stderr should contain "Writing dnsmasq config for crc"
-        And stderr should contain "Will use root access: write dnsmasq configuration in /etc/NetworkManager/dnsmasq.d/crc.conf"
+        And stderr should contain "Will use root access: write NetworkManager configuration to /etc/NetworkManager/dnsmasq.d/crc.conf"
         And stderr should contain "Will use root access: executing systemctl daemon-reload command"
         And stderr should contain "Will use root access: executing systemctl reload NetworkManager"
         And stdout should contain "Setup is complete, you can now run 'crc start -b $bundlename' to start the OpenShift cluster" if bundle is not embedded
@@ -93,9 +94,8 @@ Feature: Basic test
 
     @darwin @linux @windows
     Scenario: CRC status and disk space check
-        When with up to "15" retries with wait period of "1m" command "crc status --log-level debug" output should not contain "Stopped"
-        And stdout should contain "Running"
-        And stdout should match ".*Disk Usage: *\d+\.\d+GB of 32.\d+GB.*"
+        When checking that CRC is running
+        And stdout should match ".*Disk Usage: *\d+[\.\d]*GB of 32.\d+GB.*"
 
     @darwin @linux @windows
     Scenario: CRC IP check
@@ -120,13 +120,11 @@ Feature: Basic test
 
     @darwin @linux @windows
     Scenario: CRC status check
-        When with up to "2" retries with wait period of "1m" command "crc status --log-level debug" output should not contain "Running"
-        And stdout should contain "Stopped"
+        When checking that CRC is stopped
+        And stdout should not contain "Running"
 
     @darwin @linux @windows
     Scenario: CRC console check
-        Given executing "crc status" succeeds
-        And stdout contains "Stopped"
         When executing "crc console"
         Then stderr should contain "The OpenShift cluster is not running, cannot open the OpenShift Web Console"
 
@@ -151,11 +149,11 @@ Feature: Basic test
         When executing "crc cleanup" succeeds
         Then stderr should contain "Removing the crc VM if exists"
         And stderr should contain "Removing /etc/NetworkManager/dnsmasq.d/crc.conf file"
-        And stderr should contain "Will use root access: removing dnsmasq configuration in /etc/NetworkManager/dnsmasq.d/crc.conf"
+        And stderr should contain "Will use root access: removing NetworkManager configuration file in /etc/NetworkManager/dnsmasq.d/crc.conf"
         And stderr should contain "Will use root access: executing systemctl daemon-reload command"
         And stderr should contain "Will use root access: executing systemctl reload NetworkManager"
         And stderr should contain "Removing /etc/NetworkManager/conf.d/crc-nm-dnsmasq.conf file"
-        And stderr should contain "Will use root access: Removing NetworkManager config in /etc/NetworkManager/conf.d/crc-nm-dnsmasq.conf"
+        And stderr should contain "Will use root access: removing NetworkManager configuration file in /etc/NetworkManager/conf.d/crc-nm-dnsmasq.conf"
         And stderr should contain "Will use root access: executing systemctl daemon-reload command"
         And stderr should contain "Will use root access: executing systemctl reload NetworkManager"
         And stderr should contain "Removing 'crc' network from libvirt"

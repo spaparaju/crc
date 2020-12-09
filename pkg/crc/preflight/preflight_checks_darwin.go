@@ -1,11 +1,15 @@
 package preflight
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/user"
+	"path/filepath"
 
 	"github.com/code-ready/crc/pkg/crc/cache"
+	"github.com/code-ready/crc/pkg/crc/constants"
 	"github.com/code-ready/crc/pkg/crc/logging"
 	"github.com/code-ready/crc/pkg/crc/network"
 	crcos "github.com/code-ready/crc/pkg/os"
@@ -180,5 +184,33 @@ func addFileWritePermissionToUser(filename string) error {
 	}
 	logging.Debugf("%s is readable/writable by current user", filename)
 
+	return nil
+}
+
+func stopCRCHyperkitProcess() error {
+	pgrepPath, err := exec.LookPath("pgrep")
+	if err != nil {
+		return fmt.Errorf("Could not find 'pgrep'. %w", err)
+	}
+	if _, _, err := crcos.RunWithDefaultLocale(pgrepPath, "-f", filepath.Join(constants.CrcBinDir, "hyperkit")); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			/* 1: no processes matched */
+			if exitErr.ExitCode() == 1 {
+				logging.Debugf("No running 'hyperkit' process started by crc")
+				return nil
+			}
+		}
+		logging.Debugf("Failed to find 'hyperkit' process. %v", err)
+		/* Unclear what pgrep failure was, don't return, maybe pkill will be more successful */
+	}
+
+	pkillPath, err := exec.LookPath("pkill")
+	if err != nil {
+		return fmt.Errorf("Could not find 'pkill'. %w", err)
+	}
+	if _, _, err := crcos.RunWithDefaultLocale(pkillPath, "-f", filepath.Join(constants.CrcBinDir, "hyperkit")); err != nil {
+		return fmt.Errorf("Failed to kill 'hyperkit' process. %w", err)
+	}
 	return nil
 }

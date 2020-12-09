@@ -14,64 +14,70 @@ import (
 	"github.com/code-ready/crc/pkg/os/linux"
 )
 
-var libvirtPreflightChecks = [...]Check{
-	{
-		configKeySuffix:  "check-virt-enabled",
-		checkDescription: "Checking if Virtualization is enabled",
-		check:            checkVirtualizationEnabled,
-		fixDescription:   "Setting up virtualization",
-		fix:              fixVirtualizationEnabled,
-	},
-	{
-		configKeySuffix:  "check-kvm-enabled",
-		checkDescription: "Checking if KVM is enabled",
-		check:            checkKvmEnabled,
-		fixDescription:   "Setting up KVM",
-		fix:              fixKvmEnabled,
-	},
-	{
-		configKeySuffix:  "check-libvirt-installed",
-		checkDescription: "Checking if libvirt is installed",
-		check:            checkLibvirtInstalled,
-		fixDescription:   "Installing libvirt service and dependencies",
-		fix:              fixLibvirtInstalled,
-	},
-	{
-		configKeySuffix:  "check-user-in-libvirt-group",
-		checkDescription: "Checking if user is part of libvirt group",
-		check:            checkUserPartOfLibvirtGroup,
-		fixDescription:   "Adding user to libvirt group",
-		fix:              fixUserPartOfLibvirtGroup,
-	},
-	{
-		configKeySuffix:  "check-libvirt-running",
-		checkDescription: "Checking if libvirt daemon is running",
-		check:            checkLibvirtServiceRunning,
-		fixDescription:   "Starting libvirt service",
-		fix:              fixLibvirtServiceRunning,
-	},
-	{
-		configKeySuffix:  "check-libvirt-version",
-		checkDescription: "Checking if a supported libvirt version is installed",
-		check:            checkLibvirtVersion,
-		fixDescription:   "Installing a supported libvirt version",
-		fix:              fixLibvirtVersion,
-	},
-	{
-		configKeySuffix:  "check-libvirt-driver",
-		checkDescription: "Checking if crc-driver-libvirt is installed",
-		check:            checkMachineDriverLibvirtInstalled,
-		fixDescription:   "Installing crc-driver-libvirt",
-		fix:              fixMachineDriverLibvirtInstalled,
-	},
-	{
-		configKeySuffix:  "check-obsolete-libvirt-driver",
-		checkDescription: "Checking for obsolete crc-driver-libvirt",
-		check:            checkOldMachineDriverLibvirtInstalled,
-		fixDescription:   "Removing older system-wide crc-driver-libvirt",
-		fix:              fixOldMachineDriverLibvirtInstalled,
-		flags:            SetupOnly,
-	},
+func libvirtPreflightChecks(distro *linux.OsRelease) []Check {
+	checks := []Check{
+		{
+			configKeySuffix:  "check-virt-enabled",
+			checkDescription: "Checking if Virtualization is enabled",
+			check:            checkVirtualizationEnabled,
+			fixDescription:   "Setting up virtualization",
+			fix:              fixVirtualizationEnabled,
+		},
+		{
+			configKeySuffix:  "check-kvm-enabled",
+			checkDescription: "Checking if KVM is enabled",
+			check:            checkKvmEnabled,
+			fixDescription:   "Setting up KVM",
+			fix:              fixKvmEnabled,
+		},
+		{
+			configKeySuffix:  "check-libvirt-installed",
+			checkDescription: "Checking if libvirt is installed",
+			check:            checkLibvirtInstalled,
+			fixDescription:   "Installing libvirt service and dependencies",
+			fix:              fixLibvirtInstalled(distro),
+		},
+		{
+			configKeySuffix:  "check-user-in-libvirt-group",
+			checkDescription: "Checking if user is part of libvirt group",
+			check:            checkUserPartOfLibvirtGroup,
+			fixDescription:   "Adding user to libvirt group",
+			fix:              fixUserPartOfLibvirtGroup(distro),
+		},
+		{
+			configKeySuffix:  "check-libvirt-running",
+			checkDescription: "Checking if libvirt daemon is running",
+			check:            checkLibvirtServiceRunning,
+			fixDescription:   "Starting libvirt service",
+			fix:              fixLibvirtServiceRunning,
+		},
+		{
+			configKeySuffix:  "check-libvirt-version",
+			checkDescription: "Checking if a supported libvirt version is installed",
+			check:            checkLibvirtVersion,
+			fixDescription:   "Installing a supported libvirt version",
+			fix:              fixLibvirtVersion,
+		},
+		{
+			configKeySuffix:  "check-libvirt-driver",
+			checkDescription: "Checking if crc-driver-libvirt is installed",
+			check:            checkMachineDriverLibvirtInstalled,
+			fixDescription:   "Installing crc-driver-libvirt",
+			fix:              fixMachineDriverLibvirtInstalled,
+		},
+		{
+			cleanupDescription: "Removing the crc VM if exists",
+			cleanup:            removeCrcVM,
+			flags:              CleanUpOnly,
+		},
+	}
+	if distroID(distro) == linux.Ubuntu {
+		checks = append(checks, ubuntuPreflightChecks...)
+	}
+	return checks
+}
+
+var libvirtNetworkPreflightChecks = [...]Check{
 	{
 		configKeySuffix:    "check-crc-network",
 		checkDescription:   "Checking if libvirt 'crc' network is available",
@@ -87,11 +93,6 @@ var libvirtPreflightChecks = [...]Check{
 		check:            checkLibvirtCrcNetworkActive,
 		fixDescription:   "Starting libvirt 'crc' network",
 		fix:              fixLibvirtCrcNetworkActive,
-	},
-	{
-		cleanupDescription: "Removing the crc VM if exists",
-		cleanup:            removeCrcVM,
-		flags:              CleanUpOnly,
 	},
 }
 
@@ -170,42 +171,83 @@ func getPreflightChecks(_ bool, networkMode network.Mode) []Check {
 	return getPreflightChecksForDistro(distro(), networkMode)
 }
 
-func getPreflightChecksForDistro(distro linux.OsType, networkMode network.Mode) []Check {
-	checks := commonChecks()
+func getNetworkChecksForDistro(distro *linux.OsRelease, networkMode network.Mode) []Check {
+	var checks []Check
 
 	if networkMode == network.VSockMode {
-		checks = append(checks, vsockPreflightChecks)
+		return append(checks, vsockPreflightChecks)
 	}
 
-	switch distro {
-	case linux.Ubuntu:
-	case linux.RHEL, linux.CentOS, linux.Fedora:
-		if networkMode == network.DefaultMode {
-			checks = append(checks, redhatPreflightChecks[:]...)
-		}
+	switch {
 	default:
-		logging.Warnf("distribution-specific preflight checks are not implemented for %s", distro)
-		if networkMode == network.DefaultMode {
-			checks = append(checks, redhatPreflightChecks[:]...)
+		logging.Warnf("distribution-specific preflight checks are not implemented for '%s'", distroID(distro))
+		fallthrough
+	case distroIsLike(distro, linux.Ubuntu), distroIsLike(distro, linux.Fedora):
+		checks = append(checks, nmPreflightChecks[:]...)
+		if usesSystemdResolved(distro) {
+			checks = append(checks, systemdResolvedPreflightChecks[:]...)
+		} else {
+			checks = append(checks, dnsmasqPreflightChecks[:]...)
 		}
 	}
 
 	return checks
 }
 
-func commonChecks() []Check {
+func getPreflightChecksForDistro(distro *linux.OsRelease, networkMode network.Mode) []Check {
 	var checks []Check
 	checks = append(checks, genericPreflightChecks[:]...)
 	checks = append(checks, nonWinPreflightChecks[:]...)
-	checks = append(checks, libvirtPreflightChecks[:]...)
+	checks = append(checks, libvirtPreflightChecks(distro)...)
+	networkChecks := getNetworkChecksForDistro(distro, networkMode)
+	checks = append(checks, networkChecks...)
+	if networkMode == network.DefaultMode {
+		checks = append(checks, libvirtNetworkPreflightChecks[:]...)
+	}
 	return checks
 }
 
-func distro() linux.OsType {
+func usesSystemdResolved(osRelease *linux.OsRelease) bool {
+	switch distroID(osRelease) {
+	case linux.Ubuntu:
+		return true
+	case linux.Fedora:
+		return osRelease.VersionID >= "33"
+	default:
+		return false
+	}
+}
+
+func distroID(osRelease *linux.OsRelease) linux.OsType {
+	if osRelease == nil {
+		return "unknown"
+	}
+	// FIXME: should also use IDLike
+	return osRelease.ID
+}
+
+func distroIsLike(osRelease *linux.OsRelease, osType linux.OsType) bool {
+	if osRelease == nil {
+		return false
+	}
+	if osRelease.ID == osType {
+		return true
+	}
+
+	for _, id := range osRelease.GetIDLike() {
+		if id == osType {
+			return true
+		}
+	}
+
+	return false
+}
+
+func distro() *linux.OsRelease {
 	distro, err := linux.GetOsRelease()
 	if err != nil {
 		logging.Warnf("cannot get distribution name: %v", err)
-		return "unknown"
+		return nil
 	}
-	return distro.ID
+	return distro
 }
